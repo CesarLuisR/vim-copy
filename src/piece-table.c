@@ -116,15 +116,6 @@ undo_info_t* create_info(piece_table_t* pt, piece_t* piece) {
     piece_t* end_point = piece->next ? piece->next : pt->sequence->tail;
     piece_t* new_piece = create_piece(piece->data->source, piece->data->index, piece->data->length);
 
-        printf("You know mi friend: ");
-        const char* buffer = (strcmp(insert_point->data->source, "original") == 0)
-            ? pt->original_buffer
-            : pt->append_buffer;
-        
-        for (int i = 0; i < insert_point->data->length; i++) 
-            putchar(buffer[insert_point->data->index + i]);
-        printf("\n");
-
     seq_range->head = new_piece;
     if (insert_point == end_point) new_piece->next = NULL;
     else new_piece->next = end_point;
@@ -155,14 +146,12 @@ void display_text(piece_table_t* pt) {
     piece_t* current = pt->sequence->head;
 
     while (current != NULL) {
-    printf("PIECE ->/");
         const char* buffer = (strcmp(current->data->source, "original") == 0)
             ? pt->original_buffer
             : pt->append_buffer;
         
         for (int i = 0; i < current->data->length; i++) 
             putchar(buffer[current->data->index + i]);
-    printf("/\n");
 
         current = current->next;
     }
@@ -317,20 +306,27 @@ void replace_text(piece_table_t* pt, int index, const char* new_text, stack_t* s
 
 // Undo/redo
 void undo(piece_table_t* pt, stack_t* stack) {
+    if (stack->head == NULL) return;
+
     piece_t* current = pt->sequence->head;
     piece_t* stack_head = stack->head->value->sequence->head;
     piece_t* insert_point = stack->head->value->insert_point;
+    piece_t* end_point = stack->head->value->end_point;
 
     while (current != NULL) {
-        if (current == insert_point) {
-            if (stack_head == pt->sequence->head) {
-                printf("HOLA HOLA");
-                pt->sequence->head = stack->head->value->sequence->head;
-                stack_pop(stack);
-                return;
-            } 
+        if (insert_point == end_point) {
+            pt->sequence->head = stack->head->value->sequence->head;
+            pt->sequence->tail = stack->head->value->sequence->head;
+            stack_pop(stack);
+            return;
+        }
 
+        if (current == insert_point) {
             current->next = stack->head->value->sequence->head;
+
+            if (current->next->next == pt->sequence->tail)
+                pt->sequence->tail = stack->head->value->sequence->head;
+
             stack_pop(stack);
             return;
         }
@@ -344,14 +340,18 @@ int main(void) {
     piece_table_t* pt = pt_create(original);
     stack_t* stack = stack_create();
 
-    display_text(pt);
     insert_text(pt, " Joel y a", 6, stack);
-    display_text(pt);
     insert_text(pt, " CESAR y a", 6, stack);
 
-    display_text(pt);
     undo(pt, stack);
+    undo(pt, stack);
+
+    stack_dump(stack, pt);
     display_text(pt);
+
+    insert_text(pt, "TODO ESTO DEBERIA IR AL COMIENZO ", 0, stack);
+    display_text(pt);
+
     undo(pt, stack);
     display_text(pt);
     return 0;
