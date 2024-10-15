@@ -2,55 +2,6 @@
 #include <stdio.h>
 #include <string.h>
 
-typedef struct stack_node_t {
-    struct stack_node_t* next;
-    const char* value;
-} stack_node_t;
-
-typedef struct {
-    stack_node_t* head;
-} stack_t;
-
-stack_t* stack_create() {
-    stack_t* stack = malloc(sizeof(stack_t));
-    stack->head = NULL;
-    return stack;
-}
-
-void stack_push(stack_t* stack, const char* value) {
-    stack_node_t* node = malloc(sizeof(stack_node_t));
-    node->next = NULL;
-    node->value = strdup(value);
-
-    if (stack->head == NULL) {
-        stack->head = node;
-    } else {
-        node->next = stack->head;
-        stack->head = node;
-    }
-}
-
-void stack_pop(stack_t* stack) {
-    if (stack->head == NULL) return;
-
-    if (stack->head->next == NULL) {
-        stack->head = NULL;
-    } else {
-        stack_node_t* current = stack->head;
-        stack->head = stack->head->next;
-        free(current->value);
-        free(current);
-    }
-}
-
-void stack_dump(stack_t* stack) {
-    if (stack->head != NULL) {
-        printf("El valor es: %s\n", stack->head->value);
-    } else {
-        printf("Stack vacia\n");
-    }
-};
-
 typedef struct {
     char source[9];
     int index;
@@ -75,6 +26,75 @@ typedef struct {
     sequence_t* sequence;
 } piece_table_t;
 
+typedef struct {
+    piece_t* insert_point;
+    piece_t* end_point;
+    sequence_t* sequence;
+} undo_info_t;
+
+typedef struct stack_node_t {
+    struct stack_node_t* next;
+    undo_info_t* value;
+} stack_node_t;
+
+typedef struct {
+    stack_node_t* head;
+} stack_t;
+
+stack_t* stack_create() {
+    stack_t* stack = malloc(sizeof(stack_t));
+    stack->head = NULL;
+    return stack;
+}
+
+void stack_push(stack_t* stack, undo_info_t* info) {
+    stack_node_t* node = malloc(sizeof(stack_node_t));
+    node->next = NULL;
+    node->value = info; 
+
+    if (stack->head == NULL) {
+        stack->head = node;
+    } else {
+        node->next = stack->head;
+        stack->head = node;
+    }
+}
+
+void stack_pop(stack_t* stack) {
+    if (stack->head == NULL) return;
+
+    if (stack->head->next == NULL) {
+        stack->head = NULL;
+    } else {
+        stack_node_t* current = stack->head;
+        stack->head = stack->head->next;
+        free(current->value);
+        free(current);
+    }
+}
+
+void stack_dump(stack_t* stack, piece_table_t* pt) {
+    if (stack->head == NULL) {
+        printf("Stack vacia\n");
+        return;
+    }
+
+    piece_t* current = stack->head->value->sequence->head;
+
+    printf("STACK DUMP: ");
+    while (current != NULL) {
+        const char* buffer = (strcmp(current->data->source, "original") == 0)
+            ? pt->original_buffer
+            : pt->append_buffer;
+        
+        for (int i = 0; i < current->data->length; i++) 
+            putchar(buffer[current->data->index + i]);
+
+        current = current->next;
+    }
+    printf("\n");
+};
+
 piece_t* create_piece(const char source[9], int index, int length) {
     piece_t* piece = malloc(sizeof(piece_t));
     piece->data = malloc(sizeof(data_t));
@@ -87,6 +107,34 @@ piece_t* create_piece(const char source[9], int index, int length) {
     piece->prev = NULL;
 
     return piece;
+}
+
+undo_info_t* create_info(piece_table_t* pt, piece_t* piece) {
+    sequence_t* seq_range = malloc(sizeof(sequence_t));
+
+    piece_t* insert_point = piece->prev ? piece->prev : pt->sequence->head;
+    piece_t* end_point = piece->next ? piece->next : pt->sequence->tail;
+    piece_t* new_piece = create_piece(piece->data->source, piece->data->index, piece->data->length);
+
+        printf("You know mi friend: ");
+        const char* buffer = (strcmp(insert_point->data->source, "original") == 0)
+            ? pt->original_buffer
+            : pt->append_buffer;
+        
+        for (int i = 0; i < insert_point->data->length; i++) 
+            putchar(buffer[insert_point->data->index + i]);
+        printf("\n");
+
+    seq_range->head = new_piece;
+    if (insert_point == end_point) new_piece->next = NULL;
+    else new_piece->next = end_point;
+
+    undo_info_t* info = malloc(sizeof(undo_info_t));
+    info->insert_point = insert_point;
+    info->end_point = end_point;
+    info->sequence = seq_range;
+
+    return info;
 }
 
 piece_table_t* pt_create(const char* file_text) {
@@ -105,15 +153,16 @@ piece_table_t* pt_create(const char* file_text) {
 
 void display_text(piece_table_t* pt) {
     piece_t* current = pt->sequence->head;
-    printf("APPEND: %s\n\n", pt->append_buffer);
 
     while (current != NULL) {
+    printf("PIECE ->/");
         const char* buffer = (strcmp(current->data->source, "original") == 0)
             ? pt->original_buffer
             : pt->append_buffer;
         
         for (int i = 0; i < current->data->length; i++) 
             putchar(buffer[current->data->index + i]);
+    printf("/\n");
 
         current = current->next;
     }
@@ -121,7 +170,7 @@ void display_text(piece_table_t* pt) {
     putchar('\n');
 }
 
-void insert_text(piece_table_t* pt, const char* new_text, int position) {
+void insert_text(piece_table_t* pt, const char* new_text, int position, stack_t* stack) {
     int new_text_len = strlen(new_text);
 
     if (pt->append_buffer == NULL) {
@@ -137,15 +186,24 @@ void insert_text(piece_table_t* pt, const char* new_text, int position) {
     int cur_pos = 0;
 
     while (current != NULL) {
-        if (cur_pos + current->data->length >= position) {
+        // here we did a little change with >=
+        if (cur_pos + current->data->length > position) {
+            undo_info_t* info = create_info(pt, current);
+            stack_push(stack, info);
+
             int split_text = position - cur_pos;
 
-            piece_t* after_piece = create_piece(current->data->source, current->data->index + split_text, current->data->length - split_text);
+            piece_t* after_piece = NULL;
+            if (current->data->length == split_text) {
+                after_piece = current->next;
+            } else {
+                after_piece = create_piece(current->data->source, current->data->index + split_text, current->data->length - split_text);
+                after_piece->next = current->next;
+            }
 
             // Cutting the first half 
             current->data->length = split_text;
-
-            after_piece->next = current->next;
+ 
             if (current->next != NULL) {
                 current->next->prev = after_piece;
             }
@@ -252,34 +310,49 @@ void delete_text(piece_table_t* pt, int index, int length) {
     }
 }
 
-void replace_text(piece_table_t* pt, int index, const char* new_text) {
+void replace_text(piece_table_t* pt, int index, const char* new_text, stack_t* stack) {
     delete_text(pt, index, strlen(new_text));
-    insert_text(pt, new_text, index);
+    insert_text(pt, new_text, index, stack);
 }
 
 // Undo/redo
+void undo(piece_table_t* pt, stack_t* stack) {
+    piece_t* current = pt->sequence->head;
+    piece_t* stack_head = stack->head->value->sequence->head;
+    piece_t* insert_point = stack->head->value->insert_point;
+
+    while (current != NULL) {
+        if (current == insert_point) {
+            if (stack_head == pt->sequence->head) {
+                printf("HOLA HOLA");
+                pt->sequence->head = stack->head->value->sequence->head;
+                stack_pop(stack);
+                return;
+            } 
+
+            current->next = stack->head->value->sequence->head;
+            stack_pop(stack);
+            return;
+        }
+
+        current = current->next;
+    }
+}
 
 int main(void) {
     const char* original = "Hola a todos";
     piece_table_t* pt = pt_create(original);
     stack_t* stack = stack_create();
-    // stack_push(stack, "Hola");
-    // stack_push(stack, "Despues de hola");
-    // stack_push(stack, "Ultimo valor");
-    // stack_pop(stack);
-    // stack_pop(stack);
-    // stack_pop(stack);
-    // stack_dump(stack);
 
-    // insert_text(pt, " Joel y a", 6);
-    // insert_text(pt, "Al inicio: ", 0);
+    display_text(pt);
+    insert_text(pt, " Joel y a", 6, stack);
+    display_text(pt);
+    insert_text(pt, " CESAR y a", 6, stack);
 
-    // display_text(pt);
-
-    // replace_text(pt, 2, "TODO ESTO VA PARA xdxdxdxdxdODOSaa");
-    // replace_text(pt, 0, "CO");
-
-    // display_text(pt);
-
+    display_text(pt);
+    undo(pt, stack);
+    display_text(pt);
+    undo(pt, stack);
+    display_text(pt);
     return 0;
 }

@@ -186,3 +186,24 @@ void remove_text(piece_table_t* pt, int index, int length) {
         current = current->next;
     }
 }
+
+    if (piece->prev) {
+        seq_range->head = piece->prev;
+        seq_range->head->next = new_piece;
+    } else {
+        seq_range->head = new_piece;
+        seq_range->head->next = new_piece->next;
+    }
+
+    if (piece->next) {
+        new_piece->next = piece->next;
+        seq_range->tail = piece->next;
+    } else {
+        new_piece->next = NULL;
+        seq_range->tail = new_piece;
+    }
+    
+    if (seq_range->tail) {
+        seq_range->tail->prev = new_piece;
+        seq_range->tail->next = NULL;
+    }
