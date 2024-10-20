@@ -17,7 +17,6 @@ typedef struct piece_t {
 typedef struct {
     piece_t* head;
     piece_t* tail;
-    piece_t** entries;
 } sequence_t;
 
 typedef struct {
@@ -82,16 +81,6 @@ void stack_dump(stack_t* stack, piece_table_t* pt) {
     piece_t* current = stack->head->value->sequence->head;
 
     printf("STACK DUMP: ");
-    while (current != NULL) {
-        const char* buffer = (strcmp(current->data->source, "original") == 0)
-            ? pt->original_buffer
-            : pt->append_buffer;
-        
-        for (int i = 0; i < current->data->length; i++) 
-            putchar(buffer[current->data->index + i]);
-
-        current = current->next;
-    }
     printf("\n");
 };
 
@@ -109,21 +98,40 @@ piece_t* create_piece(const char source[9], int index, int length) {
     return piece;
 }
 
-undo_info_t* create_info(piece_table_t* pt, piece_t* piece) {
+undo_info_t* create_info(piece_table_t* pt, sequence_t* pieces) {
     sequence_t* seq_range = malloc(sizeof(sequence_t));
+    seq_range->tail = NULL;
 
-    piece_t* insert_point = piece->prev ? piece->prev : pt->sequence->head;
-    piece_t* end_point = piece->next ? piece->next : pt->sequence->tail;
-    piece_t* new_piece = create_piece(piece->data->source, piece->data->index, piece->data->length);
+    piece_t* insert_point = pieces->head->prev ? pieces->head->prev : pt->sequence->head;
+    piece_t* end_point = NULL;
 
-    seq_range->head = new_piece;
-    if (insert_point == end_point) new_piece->next = NULL;
-    else new_piece->next = end_point;
+    if (pieces->tail) {
+        end_point = pieces->tail->next;
+    } else {
+        end_point = pieces->head->next ? pieces->head->next : pt->sequence->tail;
+    }
 
     undo_info_t* info = malloc(sizeof(undo_info_t));
-    info->insert_point = insert_point;
-    info->end_point = end_point;
-    info->sequence = seq_range;
+
+    piece_t* piece = pieces->head;
+    while (piece != NULL) {
+        piece_t* new_piece = create_piece(piece->data->source, piece->data->index, piece->data->length);
+        if (seq_range->tail == NULL) {
+            seq_range->head = new_piece;
+            seq_range->tail = new_piece;
+            new_piece->prev = NULL;
+        } else {
+            new_piece->prev = seq_range->tail;
+            seq_range->tail = new_piece;
+            new_piece->prev->next = new_piece;
+        }
+
+        info->insert_point = insert_point;
+        info->end_point = end_point;
+        info->sequence = seq_range;
+
+        piece = piece->next;
+    }
 
     return info;
 }
@@ -134,9 +142,8 @@ piece_table_t* pt_create(const char* file_text) {
     pt->original_buffer = strdup(file_text);
     pt->append_buffer = NULL;
     pt->sequence = malloc(sizeof(sequence_t));
-    pt->sequence->entries = NULL;
 
-    piece_t* initial_piece = create_piece("original", 0, strlen(file_text));
+    piece_t* initial_piece = create_piece("original", 0, strlen(file_text) + 1);
     pt->sequence->head = pt->sequence->tail = initial_piece;
 
     return pt;
@@ -146,12 +153,14 @@ void display_text(piece_table_t* pt) {
     piece_t* current = pt->sequence->head;
 
     while (current != NULL) {
+        printf("PIECE: (", current->data->index);
         const char* buffer = (strcmp(current->data->source, "original") == 0)
             ? pt->original_buffer
             : pt->append_buffer;
         
         for (int i = 0; i < current->data->length; i++) 
             putchar(buffer[current->data->index + i]);
+        printf("]\n");
 
         current = current->next;
     }
@@ -159,7 +168,7 @@ void display_text(piece_table_t* pt) {
     putchar('\n');
 }
 
-void insert_text(piece_table_t* pt, const char* new_text, int position, stack_t* stack) {
+void insert_text(piece_table_t* pt, char* new_text, int position, stack_t* stack) {
     int new_text_len = strlen(new_text);
 
     if (pt->append_buffer == NULL) {
@@ -177,7 +186,10 @@ void insert_text(piece_table_t* pt, const char* new_text, int position, stack_t*
     while (current != NULL) {
         // here we did a little change with >=
         if (cur_pos + current->data->length > position) {
-            undo_info_t* info = create_info(pt, current);
+            sequence_t* undo_seq = malloc(sizeof(sequence_t));
+            undo_seq->head = current;
+            undo_seq->tail = NULL;
+            undo_info_t* info = create_info(pt, undo_seq);
             stack_push(stack, info);
 
             int split_text = position - cur_pos;
@@ -200,8 +212,10 @@ void insert_text(piece_table_t* pt, const char* new_text, int position, stack_t*
             piece_t* new_piece = create_piece("append", strlen(pt->append_buffer) - new_text_len, new_text_len);
 
             if (current->data->length == 0) {
-                if (current->prev)
+                if (current->prev) {
+                    new_piece->prev = current->prev;
                     current->prev->next = new_piece;
+                } 
 
                 if (current == pt->sequence->head)
                     pt->sequence->head = new_piece;
@@ -231,15 +245,21 @@ void insert_text(piece_table_t* pt, const char* new_text, int position, stack_t*
     }
 }
 
-void delete_text(piece_table_t* pt, int index, int length) {
+void delete_text(piece_table_t* pt, int index, int length, stack_t* stack) {
     piece_t* current = pt->sequence->head;
     int cur_pos = 0;
+
     piece_t *first_piece = NULL, *last_piece = NULL;
+
+    sequence_t* undo_seq = malloc(sizeof(sequence_t));
+    undo_seq->tail = NULL;
+    undo_seq->head = NULL;
 
     while (current != NULL) {
         int piece_start = cur_pos;
-        int piece_end = cur_pos + current->data->length;
+        int piece_end = cur_pos + current->data->length - 1;
 
+        // When deleting is in the same piece
         if (index >= piece_start && index + length <= piece_end) {
             piece_t* first_span = create_piece(current->data->source, current->data->index, index - piece_start);
             piece_t* last_span = create_piece(current->data->source, current->data->index + (index + length - piece_start), piece_end - (index + length));
@@ -247,30 +267,53 @@ void delete_text(piece_table_t* pt, int index, int length) {
             first_span->next = last_span;
             last_span->prev = first_span;
 
-            if (current->prev != NULL) current->prev->next = first_span;
-            else pt->sequence->head = first_span;
-            
-            if (current->next != NULL) {
-                last_span->next = current->next;
+            if (current->prev) {
+                current->prev->next = first_span;
+                first_span->prev = current->prev;
+            } else {
+                pt->sequence->head = first_span;
+                first_span->prev = NULL;
+            }
+
+            if (current->next) {
                 current->next->prev = last_span;
-            } else pt->sequence->tail = last_span;
+                last_span->next = current->next;
+            } else {
+                pt->sequence->tail = last_span;
+                last_span->next = NULL;
+            }
+
+            piece_t* piece = create_piece(current->data->source, current->data->index, current->data->length);
+            undo_seq->head = piece;
+            undo_seq->tail = piece;
+            piece->next = current->next;
+            piece->prev = current->prev;
+
+            undo_info_t* info = create_info(pt, undo_seq);
+            stack_push(stack, info);
 
             free(current->data);
             free(current);
             return;
         }
 
-        if (index >= piece_start && index < piece_end) {
+        // When deleting is on various pieces
+
+        // Beginning of the deletion piece
+        if (index >= piece_start && index <= piece_end) {
             first_piece = create_piece(current->data->source, current->data->index, index - piece_start);
 
             if (current->prev) {
                 current->prev->next = first_piece;
                 first_piece->prev = current->prev;
-            } else pt->sequence->head = first_piece;
+            } else {
+                pt->sequence->head->next = first_piece;
+            }
 
             first_piece->next = NULL;
         }
 
+        // End of the deletion piece
         if (index + length >= piece_start && index + length <= piece_end) {
             last_piece = create_piece(current->data->source, current->data->index + (index + length - piece_start), piece_end - (index + length));
 
@@ -282,16 +325,38 @@ void delete_text(piece_table_t* pt, int index, int length) {
             last_piece->prev = NULL;
         }
 
+        // Pieces bewteen. For delete
         if (index + length > piece_start && index < piece_end) {
             piece_t* to_delete = current;
+            piece_t* piece = create_piece(current->data->source, current->data->index, current->data->length);
+
+            if (undo_seq->tail == NULL) {
+                undo_seq->tail = piece;
+                undo_seq->head = piece;
+                piece->next = NULL;  
+                piece->prev = NULL;
+            } else {
+                piece->prev = undo_seq->tail;  
+                undo_seq->tail->next = piece;  
+                undo_seq->tail = piece;
+                piece->next = current->next;
+            }
+
+            if (pt->sequence->tail == undo_seq->tail->prev) {
+                pt->sequence->tail = undo_seq->tail;
+            }
 
             free(to_delete->data);
             free(to_delete);
-        } 
+            to_delete = NULL;
+        }
 
         cur_pos += current->data->length;
         current = current->next;
     }
+
+    undo_info_t* info = create_info(pt, undo_seq);
+    stack_push(stack, info);
 
     if (first_piece && last_piece) {
         first_piece->next = last_piece;
@@ -300,7 +365,7 @@ void delete_text(piece_table_t* pt, int index, int length) {
 }
 
 void replace_text(piece_table_t* pt, int index, const char* new_text, stack_t* stack) {
-    delete_text(pt, index, strlen(new_text));
+    delete_text(pt, index, strlen(new_text), stack);
     insert_text(pt, new_text, index, stack);
 }
 
@@ -317,6 +382,7 @@ void undo(piece_table_t* pt, stack_t* stack) {
         if (insert_point == end_point) {
             pt->sequence->head = stack->head->value->sequence->head;
             pt->sequence->tail = stack->head->value->sequence->head;
+            pt->sequence->tail->next = NULL;
             stack_pop(stack);
             return;
         }
@@ -326,7 +392,7 @@ void undo(piece_table_t* pt, stack_t* stack) {
 
             if (current->next->next == pt->sequence->tail)
                 pt->sequence->tail = stack->head->value->sequence->head;
-
+            
             stack_pop(stack);
             return;
         }
@@ -340,19 +406,16 @@ int main(void) {
     piece_table_t* pt = pt_create(original);
     stack_t* stack = stack_create();
 
-    insert_text(pt, " Joel y a", 6, stack);
-    insert_text(pt, " CESAR y a", 6, stack);
+    insert_text(pt, "Esto deberia ir antes de todo, ", 0, stack);
+    insert_text(pt, ", y esto deberia ir al final", 43, stack);
+    insert_text(pt, " y esto todavia mas al final xd", 71, stack);
+    delete_text(pt, 71, 1, stack);
 
     undo(pt, stack);
     undo(pt, stack);
-
-    stack_dump(stack, pt);
-    display_text(pt);
-
-    insert_text(pt, "TODO ESTO DEBERIA IR AL COMIENZO ", 0, stack);
-    display_text(pt);
-
     undo(pt, stack);
+    undo(pt, stack);
+
     display_text(pt);
     return 0;
 }
