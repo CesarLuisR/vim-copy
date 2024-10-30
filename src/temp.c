@@ -207,3 +207,18 @@ void remove_text(piece_table_t* pt, int index, int length) {
         seq_range->tail->prev = new_piece;
         seq_range->tail->next = NULL;
     }
+
+
+        if (index >= piece_start && index <= piece_end) {
+            first_piece = create_piece(current->data->source, current->data->index, index - piece_start);
+                        //d_piece(current->next, pt);
+
+            if (current->prev) {
+                current->prev->next = first_piece;
+                first_piece->prev = current->prev;
+            } else {
+                pt->sequence->head->next = first_piece;
+            }
+
+            first_piece->next = NULL;
+        }

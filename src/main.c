@@ -1,24 +1,49 @@
 #include <stdio.h>
+#include <stdlib.h>
 
-void read_file(char* file_to_open) {
-    FILE* file = fopen(file_to_open, "r");
+typedef struct node_t {
+    struct node_t* next;
+    void* value;
+} node_t;
 
-    if (file == NULL) {
-        printf("Error opening the file");
-        return;
+typedef struct {
+    node_t* head;
+} stack_t;
+
+typedef struct {
+    char* name;
+    int age;
+} data_t;
+
+stack_t* create_stack() {
+    stack_t* stack = malloc(sizeof(stack_t));
+    stack->head = NULL;
+    return stack;
+}
+
+void stack_push(stack_t* stack, void* value) {
+    if (stack->head) {
+        node_t* new_node = malloc(sizeof(node_t));
+        stack->head->next = NULL;
+        new_node->value = value;
+        new_node->next = stack->head;
+        stack->head = new_node;
     } else {
-        printf("File openend\n");
-        fclose(file);
+        stack->head = malloc(sizeof(node_t));
+        stack->head->value = value;
+        stack->head->next = NULL;
     }
 }
 
-int main(int argc, char* argv[]) {
-    char* file_to_open;
+int main(void) {
+    stack_t* stack = create_stack();
+    int n = 10;
+    stack_push(stack, &n);
 
-    if (argv[1]) file_to_open = argv[1];
-    else file_to_open = argv[0];
-
-    read_file(file_to_open);
-
+    void* cur = stack->head->value;
+    data_t data;
+    data.age = 10;
+    data.name = "Cesar";
+    printf("%s", data.name);
     return 0;
 }
