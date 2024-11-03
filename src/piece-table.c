@@ -307,25 +307,58 @@ void delete_text(piece_table_t* pt, int index, int length, stack_t* stack) {
         // When deleting is in the same piece
         if (index >= piece_start && index + length <= piece_end) {
             piece_t* first_span = create_piece(current->data->source, current->data->index, index - piece_start);
-            piece_t* last_span = create_piece(current->data->source, current->data->index + (index + length - piece_start), piece_end - (index + length));
+            piece_t* last_span = create_piece(current->data->source, current->data->index + (index + length - piece_start), piece_end - (index + length) + 1);
+
+            if (first_span->data->length == 0 && last_span->data->length == 0) {
+                if (current->prev) {
+                    current->prev->next = current->next;
+                    if (current->next) {
+                        current->next->prev = current->prev;
+                    }
+                } else {
+                    pt->sequence->head = current->next;
+                }
+
+                return;
+            }
 
             first_span->next = last_span;
             last_span->prev = first_span;
 
             if (current->prev) {
-                current->prev->next = first_span;
-                first_span->prev = current->prev;
+                if (first_span->data->length == 0) {
+                    current->prev->next = last_span;
+                    last_span->prev = current->prev;
+                } else {
+                    current->prev->next = first_span;
+                    first_span->prev = current->prev;
+                }
             } else {
-                pt->sequence->head = first_span;
-                first_span->prev = NULL;
+                if (first_span->data->length == 0) {
+                    pt->sequence->head = last_span;
+                    last_span->prev = NULL;
+                } else {
+                    pt->sequence->head = first_span;
+                    first_span->prev = NULL;
+                }
             }
 
             if (current->next) {
-                current->next->prev = last_span;
-                last_span->next = current->next;
+                if (last_span->data->length == 0) {
+                    current->next->prev = first_span;
+                    first_span->next = current->next;
+                } else {
+                    current->next->prev = last_span;
+                    last_span->next = current->next;
+                }
             } else {
-                pt->sequence->tail = last_span;
-                last_span->next = NULL;
+                if (last_span->data->length == 0) {
+                    pt->sequence->tail = first_span;
+                    first_span->next = NULL;
+                } else {
+                    pt->sequence->tail = last_span;
+                    last_span->next = NULL;
+                }
             }
 
             // creating and adding the undo info to the stack
@@ -655,6 +688,7 @@ void draw_screen(windows_size_t w_size, piece_table_t* pt, int current_pos, Vect
     }
 
     free(view_text);
+
 }
 
 cursor_pos_t arrow_handler(cursor_pos_t c_pos, int* text_line, piece_table_t* pt, Vector* row_info) {
@@ -715,7 +749,7 @@ cursor_pos_t arrow_handler(cursor_pos_t c_pos, int* text_line, piece_table_t* pt
     return c_pos;
 }
 
-void edit_mode_keypress_dect(piece_table_t* pt, Vector* row_info, stack_t* stack) {
+void edit_mode_keypress_dect(piece_table_t* pt, Vector* row_info, stack_t* stack, char* filename) {
     cursor_pos_t c_pos = {8, 1};
     int text_line_np = 1;
     int *text_line = &text_line_np;
@@ -746,24 +780,45 @@ void edit_mode_keypress_dect(piece_table_t* pt, Vector* row_info, stack_t* stack
             case 13: // Enter
                 insert_text(pt, "\n\0", pt_cp, stack);
                 draw_screen(w_size, pt, *text_line - c_pos.y, row_info);
-                //c_pos.y = c_pos.y + 1;
-                //c_pos.x = init_x;
+                
+                // Aqui falto implementar que salte a la siguiente linea
                 break;
             case 8: // Backspace
                 if (pt_cp - 1 >= 0 && c_pos.x - 1 >= init_x) {
                     delete_text(pt, pt_cp - 1, 1, stack);
                     draw_screen(w_size, pt, *text_line - c_pos.y, row_info);
                     c_pos.x = c_pos.x - 1;
-                }
-
-                // If is not begin of line. Goes back.
-                // a lot of bugs
-                if (c_pos.x == init_x && c_pos.y != 1) {
-                    c_pos.y = c_pos.y - 1;
-                    *text_line = *text_line - 1;
-                    c_pos.x = (int)row_info->items[*text_line - 1];
-                    c_pos.x += init_x;
                     break;
+                }
+                
+                // If is not begin of line. Goes back.
+                if (c_pos.x == init_x && c_pos.y != 1) {
+                    int last_x = (int)row_info->items[*text_line - 2];
+
+                    // If is needed to render lower lines
+                    if (c_pos.y == 5 && *text_line != 5) {
+                        draw_screen(w_size, pt, *text_line - 6, row_info);
+
+                        if (*text_line - 1 > 0) *text_line = *text_line - 1;
+                        void* new_pos = row_info->items[*text_line - 1];
+                        if (c_pos.x - init_x > row_info->items[*text_line - 1]) {
+                            c_pos.x = (int)new_pos;
+                            c_pos.x += init_x;
+                        }
+
+                        delete_text(pt, pt_cp - 1, 1, stack);
+                        draw_screen(w_size, pt, *text_line - c_pos.y, row_info);
+                        c_pos.x = last_x;
+                        c_pos.x += init_x;
+                    } else {
+                        // If not needed
+                        delete_text(pt, pt_cp - 1, 1, stack);
+                        draw_screen(w_size, pt, *text_line - c_pos.y, row_info);
+                        c_pos.y = c_pos.y - 1;
+                        *text_line = *text_line - 1;
+                        c_pos.x = last_x;
+                        c_pos.x += init_x;
+                    }
                 }
 
                 break;
@@ -773,19 +828,9 @@ void edit_mode_keypress_dect(piece_table_t* pt, Vector* row_info, stack_t* stack
 
                 break;
             default: // Any letter
-
-                // If end of line continue in next
-                if (c_pos.x == w_size.width) {
-                    c_pos.y = c_pos.y + 1;
-                    c_pos.x = init_x;
-
-                    printf("\033[%d;%dH", c_pos.y, c_pos.x);
-
-                    // I DONT REMEMBER WHY I ADDED THIS:
-                    // printf("%c", c);
-                    // c_pos.x = c_pos.x + 1;
-                    // break;
-                }
+                char str[2] = { (char)c, '\0' };
+                insert_text(pt, str, pt_cp, stack);
+                draw_screen(w_size, pt, *text_line - c_pos.y, row_info);
 
                 // If writing just after deleting
                 if (c_pos.x >= w_size.width) {
@@ -793,17 +838,14 @@ void edit_mode_keypress_dect(piece_table_t* pt, Vector* row_info, stack_t* stack
                     printf("\033[%d;%dH", c_pos.y, c_pos.x);
                 }
 
-                printf("%c", c);
                 c_pos.x = c_pos.x + 1;
 
                 break;
         }
 
-        //printf("\033[2J");
-        //display_text(pt);
-                    //printf("X: %d, RC: %d", c_pos.x, pt_cp);
+        printf("\033[%d;%dH", w_size.height, 0);
+        printf("File name: %s -> Line: %d col. %d    ", filename, *text_line, c_pos.x - 7);
         printf("\033[%d;%dH", c_pos.y, c_pos.x);
-        // printf("LA LINEA: %d", *text_line);
     }
 }
 
@@ -833,12 +875,20 @@ int main(int argc, char* argv[]) {
     Vector* row_info = create_array(1000, 'n');
     windows_size_t w_size = get_windows_size();
     draw_screen(w_size, pt, 0, row_info);
-    printf("\033[%d;%dH", 0, 8);
-    edit_mode_keypress_dect(pt, row_info, stack);
 
-    //delete_text(pt, 11, 1, stack);
-    //delete_text(pt, 10, 1, stack);
-    //delete_text(pt, 20, 1, stack);
-    //display_text(pt);
+    printf("\033[%d;%dH", w_size.height, 0);
+    printf("File name: %s -> Line: %d col. %d", file_to_open, 1, 1);
+    printf("\033[%d;%dH", 0, 8);
+
+    edit_mode_keypress_dect(pt, row_info, stack, file_to_open);
+
+    // delete_text(pt, 1, 1, stack);
+    // display_text(pt);
+    // delete_text(pt, 2, 1, stack);
+    // display_text(pt);
+    // delete_text(pt, 1, 1, stack);
+    // display_text(pt);
+    // delete_text(pt, 0, 1, stack);
+    // display_text(pt);
     return 0;
 }
